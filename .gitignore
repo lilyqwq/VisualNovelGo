@@ -39,3 +39,27 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# ===== AI 生成/协作中间产物(只保留软件本身代码) =====
+# Claude Code
+.claude/
+CLAUDE.md
+.anthropic/
+
+# WorkBuddy / CodeBuddy
+.workbuddy/
+.codebuddy/
+
+# Cursor / 其他 AI 编辑器
+.cursor/
+.cursorrules
+.aider*
+.github/copilot-instructions.md
+
+# AI 协作上下文 / session 文档
+CONTEXT.md
+AGENTS.md
+GEMINI.md
+
+# 原型图 / 需求 / vibecoding 等中间文档(整个 docs 目录)
+docs/
