@@ -3,7 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, Pressable,
   StyleSheet, StatusBar, TextInput, Modal, Dimensions, BackHandler,
 } from 'react-native'
-import Svg, { Path } from 'react-native-svg'
+import Svg, { Path, Rect } from 'react-native-svg'
 import { LinearGradient } from 'expo-linear-gradient'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import {
@@ -13,9 +13,14 @@ import {
   renameChapter,
   deleteChapter,
   moveChapter,
+  updateProjectAspect,
+  ASPECT_CYCLE,
+  ASPECT_LABEL,
+  type AspectRatio,
 } from '../hooks/useFrameResolver'
 import FrameEditorScreen from './FrameEditorScreen'
 import PlayerScreen from './PlayerScreen'
+import { KEY_SETTINGS } from './FrameEditorScreen'
 
 const STATUS_H  = StatusBar.currentHeight ?? 24
 const TOPBAR_H  = 72
@@ -104,6 +109,23 @@ function BackCircle({ onPress, style }: { onPress: () => void; style?: object })
   )
 }
 
+// ── 画幅切换按钮（编辑模式顶栏右侧，单击循环） ──────────────────────────────
+function AspectButton({ aspect, onPress }: { aspect: AspectRatio; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      style={S.aspectBtn}
+      activeOpacity={0.7}
+      onPress={onPress}
+      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+    >
+      <Svg width={13} height={13} viewBox="0 0 16 16" fill="none">
+        <Rect x={2} y={4.5} width={12} height={7} rx={1.4} stroke="rgba(210,235,248,0.62)" strokeWidth={1.3} />
+      </Svg>
+      <Text style={S.aspectBtnText}>{ASPECT_LABEL[aspect]}</Text>
+    </TouchableOpacity>
+  )
+}
+
 // ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
@@ -118,6 +140,11 @@ interface Props {
 export default function ChapterListScreen({ projectId, projectName, mode, onBack }: Props) {
   const [chapters, setChapters]   = useState<Chapter[]>([])
   const [recentId, setRecentId]   = useState<string | null>(null)
+  const [aspect, setAspect]       = useState<AspectRatio>('full')
+
+  // 全局自动播放设置（与编辑器 StyleTab 共享）
+  const [globalAutoPlay, setGlobalAutoPlay] = useState(300)
+  const [globalMinDwell, setGlobalMinDwell] = useState(1500)
 
   // Sub-screen navigation
   const [editChapter,   setEditChapter]   = useState<Chapter | null>(null)
@@ -153,11 +180,24 @@ export default function ChapterListScreen({ projectId, projectName, mode, onBack
     const projects = await loadProjects()
     const proj = projects.find(p => p.id === projectId)
     setChapters(proj?.chapters ?? [])
+    setAspect(proj?.aspectRatio ?? 'full')
     const recent = await loadRecentChapter(projectId)
     setRecentId(recent)
   }, [projectId])
 
   useEffect(() => { reload() }, [reload])
+
+  // 加载全局自动播放设置（每字间隔 / 最低停留）
+  useEffect(() => {
+    AsyncStorage.getItem(KEY_SETTINGS).then(raw => {
+      if (!raw) return
+      try {
+        const s = JSON.parse(raw)
+        if (typeof s.autoPlayInterval === 'number') setGlobalAutoPlay(s.autoPlayInterval)
+        if (typeof s.minDwell === 'number') setGlobalMinDwell(s.minDwell)
+      } catch { /* ignore */ }
+    })
+  }, [])
 
   const handleCreateChapter = async () => {
     if (!newName.trim()) return
@@ -198,6 +238,13 @@ export default function ChapterListScreen({ projectId, projectName, mode, onBack
     await reload()
   }
 
+  // 单击在 全屏 → 9:16 → 3:4 → 全屏 间循环，结果持久化到作品
+  const handleCycleAspect = useCallback(async () => {
+    const next = ASPECT_CYCLE[(ASPECT_CYCLE.indexOf(aspect) + 1) % ASPECT_CYCLE.length]
+    setAspect(next)
+    await updateProjectAspect(projectId, next)
+  }, [aspect, projectId])
+
   const handlePlayChapter = async (ch: Chapter) => {
     await saveRecentChapter(projectId, ch.id)
     setRecentId(ch.id)
@@ -210,6 +257,7 @@ export default function ChapterListScreen({ projectId, projectName, mode, onBack
       <FrameEditorScreen
         chapterId={editChapter.id}
         chapterName={editChapter.name}
+        aspect={aspect}
         onBack={async () => {
           setEditChapter(null)
           await reload()
@@ -223,8 +271,11 @@ export default function ChapterListScreen({ projectId, projectName, mode, onBack
     return (
       <PlayerScreen
         frames={playChapter.frames}
+        aspect={aspect}
         startIndex={0}
         onExit={() => setPlayChapter(null)}
+        autoPlayInterval={globalAutoPlay}
+        minDwell={globalMinDwell}
       />
     )
   }
@@ -250,6 +301,7 @@ export default function ChapterListScreen({ projectId, projectName, mode, onBack
                 <Text style={S.topbarSub}>编辑模式</Text>
               </View>
             </View>
+            <AspectButton aspect={aspect} onPress={handleCycleAspect} />
           </View>
           <LinearGradient
             colors={['transparent', 'rgba(210,235,248,0.08)', 'rgba(210,235,248,0.12)', 'rgba(210,235,248,0.08)', 'transparent']}
@@ -582,7 +634,7 @@ const S = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 22,
   },
-  topbarLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  topbarLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   topbarTitles: { flexDirection: 'column' },
   topbarTitle: {
     fontSize: 14, letterSpacing: 2, fontWeight: '600',
@@ -598,6 +650,20 @@ const S = StyleSheet.create({
     backgroundColor: 'rgba(3,5,10,0.38)',
     borderWidth: 1, borderColor: 'rgba(210,235,248,0.13)',
     alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Aspect-ratio cycle button (edit-mode topbar right)
+  aspectBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 7,
+    backgroundColor: 'rgba(3,5,10,0.38)',
+    borderWidth: 1, borderColor: 'rgba(210,235,248,0.13)',
+    borderRadius: 18,
+    zIndex: 20,
+  },
+  aspectBtnText: {
+    fontSize: 11, letterSpacing: 1.5, fontWeight: '600',
+    color: 'rgba(210,235,248,0.72)',
   },
 
   // Edit mode list

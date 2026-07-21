@@ -4,12 +4,11 @@
  * dialogType = 'dialogue' → 显示角色名栏 + 对白装饰顶线
  * dialogType = 'narration' → 名字栏占位但不可见 + 旁白装饰顶线
  *
- * 两种模式共用同一个 BlurView，切换时无需重新挂载，衔接更丝滑。
+ * 两种模式共用同一套水平渐变玻璃（左右渐隐至透明），切换时无需重新挂载，衔接更丝滑。
  */
 
 import React, { useEffect } from 'react'
 import { View, Text, StyleSheet, ViewStyle } from 'react-native'
-import { BlurView } from 'expo-blur'
 import { LinearGradient } from 'expo-linear-gradient'
 import Svg, { Polygon } from 'react-native-svg'
 import Animated, {
@@ -43,28 +42,6 @@ function GemDiamond({ size = 7, color = FROST.iceBlue }: { size?: number; color?
         fill={color}
       />
     </Svg>
-  )
-}
-
-// ── 两侧渐隐遮罩 ─────────────────────────────────
-function SideMasks() {
-  return (
-    <>
-      <LinearGradient
-        colors={['rgba(3,6,12,1)', 'rgba(3,6,12,0)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.maskLeft}
-        pointerEvents="none"
-      />
-      <LinearGradient
-        colors={['rgba(3,6,12,0)', 'rgba(3,6,12,1)']}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.maskRight}
-        pointerEvents="none"
-      />
-    </>
   )
 }
 
@@ -151,14 +128,20 @@ function CornerCut() {
   )
 }
 
-// ── 名字板 ────────────────────────────────────────
+// ── 名字板（无边框柔光底 + 左右渐隐） ──
 function NameBar({ name }: { name: string }) {
   return (
     <View style={styles.namebarWrap}>
-      <View style={styles.namebarPill}>
+      <LinearGradient
+        colors={['rgba(3,6,12,0)', 'rgba(3,6,12,0.55)', 'rgba(3,6,12,0.55)', 'rgba(3,6,12,0)']}
+        locations={[0, 0.12, 0.88, 1]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.namebarPill}
+      >
         <GemDiamond size={5} color={FROST.iceBlueDim} />
         <Text style={styles.namebarText}>{name}</Text>
-      </View>
+      </LinearGradient>
     </View>
   )
 }
@@ -209,8 +192,15 @@ export default function DialogueBox({ dialogType, characterName, visibleText, an
       </View>
 
       <View style={styles.bodyOuter}>
-        <BlurView intensity={28} tint="dark" style={StyleSheet.absoluteFill} />
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: isDialogue ? FROST.dialogBg : FROST.narrBg }]} />
+        <LinearGradient
+          colors={isDialogue
+            ? ['rgba(3,6,12,0)', 'rgba(3,6,12,0.55)', 'rgba(3,6,12,0.55)', 'rgba(3,6,12,0)']
+            : ['rgba(3,6,12,0)', 'rgba(3,6,12,0.5)', 'rgba(3,6,12,0.5)', 'rgba(3,6,12,0)']}
+          locations={[0, 0.12, 0.88, 1]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={StyleSheet.absoluteFill}
+        />
 
         {isDialogue ? <DialogueTopDeco /> : <NarrationTopDeco />}
         {isDialogue && <CornerCut />}
@@ -221,34 +211,28 @@ export default function DialogueBox({ dialogType, characterName, visibleText, an
             <ArrBob active={animDone} />
           </View>
         </View>
-        <SideMasks />
       </View>
     </View>
   )
 }
-
-const MASK_W = FROST.maskWidth
 
 const styles = StyleSheet.create({
   wrap: {},
 
   // ── NameBar ────────────────────────────────────
   namebarWrap: {
-    marginLeft: 24,
+    marginLeft: 32,
     alignSelf: 'flex-start',
+    marginBottom: 6,
   },
   namebarPill: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 7,
-    paddingHorizontal: 14,
+    paddingLeft: 16,
+    paddingRight: 24,
     paddingVertical: 5,
-    backgroundColor: 'rgba(3,6,12,0.62)',
-    borderTopLeftRadius: 8,
-    borderTopRightRadius: 8,
-    borderWidth: 1,
-    borderBottomWidth: 0,
-    borderColor: 'rgba(210,235,248,0.18)',
+    borderRadius: 8,
   },
   namebarText: {
     fontSize: 14,
@@ -350,20 +334,4 @@ const styles = StyleSheet.create({
   },
   tickL: { left: 46 },
   tickR: { right: 46 },
-
-  // ── Side masks ─────────────────────────────────
-  maskLeft: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    width: MASK_W,
-  },
-  maskRight: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    right: 0,
-    width: MASK_W,
-  },
 })

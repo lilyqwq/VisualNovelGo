@@ -12,6 +12,7 @@ import Animated, { useSharedValue, useAnimatedStyle, runOnJS } from 'react-nativ
 import {
   EditorFrame as Frame, loadChapterFrames, saveChapterFrames,
   BUILTIN_BLACK_ID, BUILTIN_WHITE_ID,
+  type AspectRatio,
 } from '../hooks/useFrameResolver'
 import PlayerScreen from './PlayerScreen'
 
@@ -29,6 +30,7 @@ export interface Props {
   chapterId: string
   chapterName: string
   onBack: () => void
+  aspect?: AspectRatio
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -67,7 +69,7 @@ const TYPE_SHORT: Record<DialogType, string> = {
 const KEY_CHAR     = 'library_characters_v1'
 const KEY_SP       = 'library_sprites_v1'
 const KEY_BG       = 'library_backgrounds_v1'
-const KEY_SETTINGS = 'global_settings_v1'
+export const KEY_SETTINGS = 'global_settings_v1'
 
 const BG_DIR     = (FileSystem.documentDirectory ?? '') + 'library/backgrounds/'
 const SPRITE_DIR = (FileSystem.documentDirectory ?? '') + 'library/sprites/'
@@ -80,6 +82,17 @@ function makeSingleFrame(): Frame {
     id: genId(), dialogType: 'narration', characterId: null,
     text: '', backgroundId: null, spriteId: null, spriteOverride: null, transition: false,
   }
+}
+
+// 取某立绘已保存的默认值（未保存过则返回 null）
+function spriteSavedOverride(
+  sprites: SpriteRecord[],
+  spriteId: string | null,
+): { scale: number; offsetX: number; offsetY: number } | null {
+  if (!spriteId) return null
+  const rec = sprites.find(s => s.id === spriteId)
+  if (!rec || rec.defaultScale === undefined) return null
+  return { scale: rec.defaultScale, offsetX: rec.defaultOffsetX ?? 0, offsetY: rec.defaultOffsetY ?? 0 }
 }
 
 async function loadList<T>(key: string): Promise<T[]> {
@@ -450,9 +463,10 @@ function MiniPreview({ frames, currentIdx, bgMap, charMap, spriteMap }: {
 }
 
 // ── ContentTab ────────────────────────────────────────────────────────────────
-function ContentTab({ frame, chars, onUpdate, canDelete, onDelete, onAddChar }: {
+function ContentTab({ frame, chars, sprites, onUpdate, canDelete, onDelete, onAddChar }: {
   frame: Frame
   chars: CharRecord[]
+  sprites: SpriteRecord[]
   onUpdate: (patch: Partial<Frame>) => void
   canDelete: boolean
   onDelete: () => void
@@ -501,7 +515,14 @@ function ContentTab({ frame, chars, onUpdate, canDelete, onDelete, onAddChar }: 
               <TouchableOpacity
                 key={char.id}
                 style={[S.chip, frame.characterId === char.id && S.chipSel]}
-                onPress={() => onUpdate({ characterId: char.id, spriteId: char.defaultSpriteId ?? null })}
+                onPress={() => {
+                  const sid = char.defaultSpriteId
+                  onUpdate({
+                    characterId: char.id,
+                    spriteId: sid,
+                    spriteOverride: sid ? spriteSavedOverride(sprites, sid) : null,
+                  })
+                }}
                 activeOpacity={0.7}
               >
                 <View style={S.chipAvatar}>
@@ -668,6 +689,10 @@ function SpriteTab({ frame, frames, currentIdx, sprites, onUpdate, onImport, onS
   const prevFrame  = currentIdx > 0 ? frames[currentIdx - 1] : null
   const canInherit = currentIdx > 0
   const sprOv      = frame.spriteOverride ?? { scale: 1.0, offsetX: 0, offsetY: 0 }
+  const curSprite  = sprites.find(s => s.id === frame.spriteId) ?? null
+  const dScale     = curSprite?.defaultScale ?? 1.0
+  const dOffX      = curSprite?.defaultOffsetX ?? 0
+  const dOffY      = curSprite?.defaultOffsetY ?? 0
 
   return (
     <>
@@ -694,10 +719,7 @@ function SpriteTab({ frame, frames, currentIdx, sprites, onUpdate, onImport, onS
                 key={sp.id}
                 style={[S.spriteCell, isSel && S.assetCellSel]}
                 onPress={() => {
-                  const rec = sprites.find(s => s.id === sp.id)
-                  const savedOv = rec?.defaultScale !== undefined
-                    ? { scale: rec.defaultScale, offsetX: rec.defaultOffsetX ?? 0, offsetY: rec.defaultOffsetY ?? 0 }
-                    : null
+                  const savedOv = spriteSavedOverride(sprites, sp.id)
                   onUpdate({ spriteId: sp.id, spriteOverride: savedOv })
                 }}
                 activeOpacity={0.7}
@@ -732,19 +754,19 @@ function SpriteTab({ frame, frames, currentIdx, sprites, onUpdate, onImport, onS
         <View style={S.section}>
           <SectionHead title="位置与缩放" />
           <StepperRow
-            label="缩放" hint="默认 1.0 · 步进 0.05"
+            label="缩放" hint={`默认 ${dScale.toFixed(2)} · 步进 0.05`}
             value={sprOv.scale} decimals={2}
             onDecrement={() => onUpdate({ spriteOverride: { ...sprOv, scale: +(sprOv.scale - 0.05).toFixed(2) } })}
             onIncrement={() => onUpdate({ spriteOverride: { ...sprOv, scale: +(sprOv.scale + 0.05).toFixed(2) } })}
           />
           <StepperRow
-            label="水平位移" hint="默认 0 · 步进 10px"
+            label="水平位移" hint={`默认 ${dOffX} · 步进 10px`}
             value={sprOv.offsetX}
             onDecrement={() => onUpdate({ spriteOverride: { ...sprOv, offsetX: sprOv.offsetX - 10 } })}
             onIncrement={() => onUpdate({ spriteOverride: { ...sprOv, offsetX: sprOv.offsetX + 10 } })}
           />
           <StepperRow
-            label="垂直位移" hint="默认 0 · 步进 10px"
+            label="垂直位移" hint={`默认 ${dOffY} · 步进 10px`}
             value={sprOv.offsetY}
             onDecrement={() => onUpdate({ spriteOverride: { ...sprOv, offsetY: sprOv.offsetY - 10 } })}
             onIncrement={() => onUpdate({ spriteOverride: { ...sprOv, offsetY: sprOv.offsetY + 10 } })}
@@ -753,7 +775,7 @@ function SpriteTab({ frame, frames, currentIdx, sprites, onUpdate, onImport, onS
           <View style={S.doubleBtn}>
             <TouchableOpacity
               style={S.doubleBtnItem}
-              onPress={() => onUpdate({ spriteOverride: null })}
+              onPress={() => onUpdate({ spriteOverride: spriteSavedOverride(sprites, frame.spriteId) })}
               activeOpacity={0.7}
             >
               <Text style={S.doubleBtnText}>恢复默认</Text>
@@ -785,11 +807,13 @@ function SpriteTab({ frame, frames, currentIdx, sprites, onUpdate, onImport, onS
 }
 
 // ── StyleTab ──────────────────────────────────────────────────────────────────
-function StyleTab({ frame, globalAutoPlay, onUpdate, onAutoPlayChange }: {
+function StyleTab({ frame, globalAutoPlay, globalMinDwell, onUpdate, onAutoPlayChange, onMinDwellChange }: {
   frame: Frame
   globalAutoPlay: number
+  globalMinDwell: number
   onUpdate: (patch: Partial<Frame>) => void
   onAutoPlayChange: (val: number) => void
+  onMinDwellChange: (val: number) => void
 }) {
   const isEmphasis  = frame.dialogType === 'emphasis'
   const isCutscene  = frame.dialogType === 'cutscene'
@@ -911,6 +935,12 @@ function StyleTab({ frame, globalAutoPlay, onUpdate, onAutoPlayChange }: {
           onDecrement={() => onAutoPlayChange(Math.max(50, globalAutoPlay - 50))}
           onIncrement={() => onAutoPlayChange(Math.min(2000, globalAutoPlay + 50))}
         />
+        <StepperRow
+          label="最低停留 (ms)" hint="默认 1500 · 每帧叠加保底"
+          value={globalMinDwell}
+          onDecrement={() => onMinDwellChange(Math.max(0, globalMinDwell - 50))}
+          onIncrement={() => onMinDwellChange(Math.min(3000, globalMinDwell + 50))}
+        />
       </View>
     </>
   )
@@ -1011,7 +1041,7 @@ function SyncFramePanel({ visible, title, frames, currentIdx, onConfirm, onClose
 }
 
 // ── Main Screen ───────────────────────────────────────────────────────────────
-export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Props) {
+export default function FrameEditorScreen({ chapterId, chapterName, onBack, aspect = 'full' }: Props) {
   const [frames, setFrames]         = useState<Frame[]>(() => [makeSingleFrame()])
   const [currentIdx, setCurrentIdx] = useState(0)
   const [activeTab, setActiveTab]   = useState<Tab>('content')
@@ -1019,6 +1049,7 @@ export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Pr
   const [chars, setChars]           = useState<CharRecord[]>([])
   const [sprites, setSprites]       = useState<SpriteRecord[]>([])
   const [globalAutoPlay, setGlobalAutoPlay] = useState(300)
+  const [globalMinDwell, setGlobalMinDwell] = useState(1500)
   const [sortVisible, setSortVisible]   = useState(false)
   const [showPreview, setShowPreview]   = useState(false)
   const [syncPanel, setSyncPanel]       = useState<'background' | 'sprite' | null>(null)
@@ -1055,6 +1086,7 @@ export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Pr
       try {
         const s = JSON.parse(raw)
         if (typeof s.autoPlayInterval === 'number') setGlobalAutoPlay(s.autoPlayInterval)
+        if (typeof s.minDwell === 'number') setGlobalMinDwell(s.minDwell)
       } catch { /* ignore */ }
     })
     loadChapterFrames(chapterId).then(loaded => {
@@ -1235,11 +1267,16 @@ export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Pr
     })
   }, [sprites, handleSaveAsDefault])
 
-  // Global autoplay
+  // Global autoplay + min dwell（两者共存于同一设置对象，保存时一并写入避免互相覆盖）
   const handleAutoPlayChange = useCallback(async (val: number) => {
     setGlobalAutoPlay(val)
-    await AsyncStorage.setItem(KEY_SETTINGS, JSON.stringify({ autoPlayInterval: val }))
-  }, [])
+    await AsyncStorage.setItem(KEY_SETTINGS, JSON.stringify({ autoPlayInterval: val, minDwell: globalMinDwell }))
+  }, [globalMinDwell])
+
+  const handleMinDwellChange = useCallback(async (val: number) => {
+    setGlobalMinDwell(val)
+    await AsyncStorage.setItem(KEY_SETTINGS, JSON.stringify({ autoPlayInterval: globalAutoPlay, minDwell: val }))
+  }, [globalAutoPlay])
 
   // Create new character
   const handleCreateChar = useCallback(async () => {
@@ -1368,7 +1405,7 @@ export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Pr
         <ScrollView style={S.tabScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {activeTab === 'content' && (
             <ContentTab
-              frame={currentFrame} chars={chars}
+              frame={currentFrame} chars={chars} sprites={sprites}
               onUpdate={updateFrame}
               canDelete={frames.length > 1}
               onDelete={requestDeleteFrame}
@@ -1398,8 +1435,10 @@ export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Pr
             <StyleTab
               frame={currentFrame}
               globalAutoPlay={globalAutoPlay}
+              globalMinDwell={globalMinDwell}
               onUpdate={updateFrame}
               onAutoPlayChange={handleAutoPlayChange}
+              onMinDwellChange={handleMinDwellChange}
             />
           )}
           <View style={{ height: 8 }} />
@@ -1414,9 +1453,11 @@ export default function FrameEditorScreen({ chapterId, chapterName, onBack }: Pr
         <View style={[StyleSheet.absoluteFill, { zIndex: 20 }]}>
           <PlayerScreen
             frames={frames}
+            aspect={aspect}
             startIndex={Math.min(currentIdx, frames.length - 1)}
             onExit={() => setShowPreview(false)}
             autoPlayInterval={globalAutoPlay}
+            minDwell={globalMinDwell}
           />
         </View>
       )}

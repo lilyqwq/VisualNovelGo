@@ -1,23 +1,31 @@
 /**
  * EmphasisText · 大字强调模式
  *
- * 每行 opacity 0→1，时长 400ms，行间间隔 200ms。
- * animKey 变化时重新执行动画；skipAnim=true 立即全显。
- * 最后一行淡入完成后调用 onAnimDone。
+ * 「逐字浮现」打字机效果，与对话/旁白一致：
+ *   - 单个 visibleCount 共享值从 0 平滑增长到总字数；
+ *   - useAnimatedReaction 把整数进度推到 React state，逐字切片渲染；
+ *   - startDelay 用于在 transition 黑幕淡入完成后再开始；
+ *   - skipAnim=true 立即全显并触发 onAnimDone；
+ *   - 全部文字浮现完成后触发 onAnimDone。
  *
- * 关键设计：animKey 变化时在 render 阶段同步把 shared value
- * 归零，而不是等 useEffect，避免切帧那一帧 opacity 仍为 1
- * 导致内容一闪而过。
+ * 防抖动 / 防浮动：
+ *   - 每层先渲染一份透明「幽灵」文字（line.slice 的完整内容）占好固定宽高，
+ *     可见文字绝对定位覆盖其上、始终 textAlign:left 逐字浮现；
+ *   - 因此无论 align 是 center / right，文字块整体位置固定、每个字落点固定、
+ *     高度不随打字浮动，打字一律从左往右（与对话一致）。
+ *
+ * animKey 变化时在 render 阶段同步把共享值/state 归零，防止切帧闪现上一帧文字。
  */
 
-import React, { useEffect, useRef } from 'react'
-import { View, StyleSheet, ViewStyle, TextStyle } from 'react-native'
+import React, { useEffect, useRef, useState, useMemo } from 'react'
+import { View, Text, StyleSheet, ViewStyle, TextStyle } from 'react-native'
 import Animated, {
   useSharedValue,
-  useAnimatedStyle,
   withTiming,
+  withDelay,
   cancelAnimation,
   runOnJS,
+  useAnimatedReaction,
   Easing,
 } from 'react-native-reanimated'
 
@@ -32,6 +40,7 @@ interface Props {
   lineHeight?: number
   animKey: string | number
   skipAnim?: boolean
+  startDelay?: number
   onAnimDone?: () => void
   style?: ViewStyle
 }
@@ -52,43 +61,13 @@ const COLOR_MAP: Record<EmphasisColor, TextStyle> = {
   black: { color: '#0a0a0a' },
 }
 
-const ALIGN_MAP: Record<EmphasisAlign, TextStyle['textAlign']> = {
-  center: 'center',
-  left: 'left',
-  right: 'right',
-}
+// 大字打字速度（毫秒/字），与对话旁白一致
+const EMPH_PER_CHAR_MS = 50
 
-function EmphLine({
-  text,
-  colorStyle,
-  textAlign,
-  fontSize,
-  lineHeight,
-  opacity,
-}: {
-  text: string
-  colorStyle: TextStyle
-  textAlign: TextStyle['textAlign']
-  fontSize: number
-  lineHeight: number
-  opacity: Animated.SharedValue<number>
-}) {
-  const animStyle = useAnimatedStyle(() => ({ opacity: opacity.value }))
-  return (
-    <Animated.Text
-      style={[
-        styles.line,
-        colorStyle,
-        { fontSize, lineHeight: fontSize * lineHeight, textAlign },
-        animStyle,
-      ]}
-    >
-      {text}
-    </Animated.Text>
-  )
-}
+// 字间距基准：默认字号 34 时 letterSpacing = 9，其余字号按比例缩放
+const BASE_FONT_SIZE = 34
+const BASE_LETTER_SPACING = 9
 
-// 固定 8 个 shared value（钩子数量不能动态变化）
 export default function EmphasisText({
   lines,
   color = 'white',
@@ -97,94 +76,107 @@ export default function EmphasisText({
   lineHeight = 1.72,
   animKey,
   skipAnim = false,
+  startDelay = 0,
   onAnimDone,
   style,
 }: Props) {
   const colorStyle = COLOR_MAP[color]
-  const textAlign = ALIGN_MAP[align]
 
-  const op0 = useSharedValue(0)
-  const op1 = useSharedValue(0)
-  const op2 = useSharedValue(0)
-  const op3 = useSharedValue(0)
-  const op4 = useSharedValue(0)
-  const op5 = useSharedValue(0)
-  const op6 = useSharedValue(0)
-  const op7 = useSharedValue(0)
-  const allOps = [op0, op1, op2, op3, op4, op5, op6, op7]
+  const [visibleChars, setVisibleChars] = useState(0)
+  const visibleCount = useSharedValue(0)
 
-  // ── render 阶段同步归零（防止切帧闪烁） ────────────
-  // useEffect 在绘制后才执行；若在此处等 effect 再归零，
-  // 切帧时那一帧会用旧值（=1）绘制，造成一闪而过。
-  // 用 ref 追踪 animKey 变化，在 render 内立即重置。
+  // 每行起始偏移 + 总字数（按阅读顺序排列，跨行连续打字）
+  const { offsets, total } = useMemo(() => {
+    const arr: number[] = []
+    let acc = 0
+    for (const line of lines) {
+      arr.push(acc)
+      acc += line.length
+    }
+    return { offsets: arr, total: acc }
+  }, [lines])
+
+  // ── render 阶段同步归零（防止切帧闪现上一帧文字） ──
   const prevAnimKeyRef = useRef<string | number | null>(null)
   if (prevAnimKeyRef.current !== animKey) {
     prevAnimKeyRef.current = animKey
-    for (const op of allOps) {
-      cancelAnimation(op)
-      op.value = 0
-    }
+    cancelAnimation(visibleCount)
+    visibleCount.value = 0
+    if (visibleChars !== 0) setVisibleChars(0)
   }
 
-  // ── 动画启动（在 effect 里，paint 后执行无妨） ────
-  useEffect(() => {
-    const n = Math.min(lines.length, allOps.length)
+  // 共享值整数进度 → React state，驱动逐字切片渲染
+  useAnimatedReaction(
+    () => Math.round(visibleCount.value),
+    (count, prev) => { if (count !== prev) runOnJS(setVisibleChars)(count) },
+  )
 
+  useEffect(() => {
     if (skipAnim) {
       // 取消尚在运行的动画，直接全显
-      for (const op of allOps) cancelAnimation(op)
-      for (let i = 0; i < n; i++) allOps[i].value = 1
+      cancelAnimation(visibleCount)
+      visibleCount.value = total
+      setVisibleChars(total)
       onAnimDone?.()
       return
     }
 
-    // animKey 变化时 op 已在 render 阶段归零，直接启动淡入
-    const FADE_DUR = 400
-    const GAP = 200
-    const tids: ReturnType<typeof setTimeout>[] = []
-
-    for (let i = 0; i < n; i++) {
-      const delay = i * (FADE_DUR + GAP)
-      const isLast = i === n - 1
-      const op = allOps[i]
-
-      const tid = setTimeout(() => {
-        if (isLast && onAnimDone) {
-          op.value = withTiming(
-            1,
-            { duration: FADE_DUR, easing: Easing.out(Easing.quad) },
-            (finished) => { if (finished) runOnJS(onAnimDone)() },
-          )
-        } else {
-          op.value = withTiming(1, { duration: FADE_DUR, easing: Easing.out(Easing.quad) })
-        }
-      }, delay)
-
-      tids.push(tid)
-    }
-
-    return () => {
-      for (const tid of tids) clearTimeout(tid)
-      for (const op of allOps) cancelAnimation(op)
-    }
+    // 逐字浮现：startDelay 等待切页淡入，再以 EMPH_PER_CHAR_MS/字 推进到 total
+    const duration = Math.max(total, 1) * EMPH_PER_CHAR_MS
+    visibleCount.value = withDelay(
+      startDelay,
+      withTiming(
+        total,
+        { duration, easing: Easing.linear },
+        (finished) => { if (finished && onAnimDone) runOnJS(onAnimDone)() },
+      ),
+    )
+    return () => { cancelAnimation(visibleCount) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [animKey, skipAnim])
+  }, [animKey, skipAnim, startDelay, total])
 
-  const containerAlign = align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+  // 文字块整体在屏幕上的水平位置仍跟随 align；但打字一律从左往右、落点固定
+  const alignSelf: ViewStyle['alignSelf'] =
+    align === 'left' ? 'flex-start' : align === 'right' ? 'flex-end' : 'center'
+
+  // 字间距随字号等比缩放（默认字号 34 → 9）
+  const letterSpacing = BASE_LETTER_SPACING * (fontSize / BASE_FONT_SIZE)
 
   return (
-    <View style={[styles.wrap, style, { alignItems: containerAlign }]}>
-      {lines.map((line, i) => (
-        <EmphLine
-          key={i}
-          text={line}
-          colorStyle={colorStyle}
-          textAlign={textAlign}
-          fontSize={fontSize}
-          lineHeight={lineHeight}
-          opacity={allOps[i]}
-        />
-      ))}
+    <View style={[styles.wrap, style]}>
+      {lines.map((line, i) => {
+        const start = offsets[i]
+        const shown = Math.max(0, Math.min(line.length, visibleChars - start))
+        const lh = fontSize * lineHeight
+        return (
+          <View
+            key={i}
+            style={[styles.lineBox, { alignSelf, minHeight: lh }]}
+          >
+            {/* 幽灵：按完整内容占好固定宽高，杜绝打字时尺寸/位置浮动 */}
+            <Text
+              pointerEvents="none"
+              style={[
+                styles.line,
+                colorStyle,
+                { fontSize, lineHeight: lh, letterSpacing, opacity: 0 },
+              ]}
+            >
+              {line}
+            </Text>
+            {/* 可见：绝对覆盖在幽灵之上，始终左对齐逐字浮现 */}
+            <Text
+              style={[
+                styles.line,
+                colorStyle,
+                { fontSize, lineHeight: lh, letterSpacing, textAlign: 'left', position: 'absolute', left: 0, top: 0, right: 0 },
+              ]}
+            >
+              {line.slice(0, shown)}
+            </Text>
+          </View>
+        )
+      })}
     </View>
   )
 }
@@ -203,7 +195,9 @@ const styles = StyleSheet.create({
   },
   line: {
     fontWeight: '600',
-    letterSpacing: 9,
     fontFamily: 'serif',
+  },
+  lineBox: {
+    position: 'relative',
   },
 })

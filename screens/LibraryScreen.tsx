@@ -244,7 +244,7 @@ export default function LibraryScreen({ onBack }: { onBack?: () => void }) {
   // ── Background handlers ────────────────────────────────────────────────────
   const handleImportBg = useCallback(async () => {
     await ensureDirs()
-    const uri = await pickAndCopy(BG_DIR, { allowsEditing: true, aspect: [SCREEN_W, SCREEN_H] })
+    const uri = await pickAndCopy(BG_DIR, { allowsEditing: true, aspect: [3, 4] })
     if (!uri) return
     const rec: BgRecord = { id: Date.now().toString(), uri, name: `背景 ${bgs.length + 1}` }
     const next = [...bgs, rec]

@@ -5,6 +5,16 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 
 export type DialogType = 'dialogue' | 'narration' | 'emphasis' | 'cutscene'
 
+// ── 播放画幅（作品级设置） ────────────────────────────────────────────────────
+// full  = 全屏铺满；9:16 / 3:4 在竖屏机上表现为上下黑边、场景宽度 = 屏宽。
+export type AspectRatio = 'full' | '9:16' | '3:4'
+export const ASPECT_CYCLE: AspectRatio[] = ['full', '9:16', '3:4']
+export const ASPECT_LABEL: Record<AspectRatio, string> = {
+  full: '全屏',
+  '9:16': '9:16',
+  '3:4': '3:4',
+}
+
 export interface EditorFrame {
   id: string
   dialogType: DialogType
@@ -27,6 +37,7 @@ export interface Project {
   id: string
   name: string
   chapters: Chapter[]
+  aspectRatio?: AspectRatio   // 作品级播放画幅，缺省按 'full' 处理（兼容旧数据）
 }
 
 export interface Chapter {
@@ -171,7 +182,7 @@ function makeId(): string {
 
 export async function createProject(name: string): Promise<Project> {
   const projects = await loadProjects()
-  const newProject: Project = { id: makeId(), name, chapters: [] }
+  const newProject: Project = { id: makeId(), name, chapters: [], aspectRatio: 'full' }
   await saveProjects([...projects, newProject])
   return newProject
 }
@@ -180,6 +191,13 @@ export async function renameProject(id: string, name: string): Promise<void> {
   const projects = await loadProjects()
   const proj = projects.find(p => p.id === id)
   if (proj) { proj.name = name; await saveProjects(projects) }
+}
+
+// 设置作品级播放画幅（全屏 / 9:16 / 3:4）
+export async function updateProjectAspect(id: string, aspect: AspectRatio): Promise<void> {
+  const projects = await loadProjects()
+  const proj = projects.find(p => p.id === id)
+  if (proj) { proj.aspectRatio = aspect; await saveProjects(projects) }
 }
 
 export async function deleteProject(id: string): Promise<void> {
